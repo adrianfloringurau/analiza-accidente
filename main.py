@@ -6,6 +6,15 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import geopandas as gpd
 from sklearn.preprocessing import LabelEncoder, StandardScaler
+import copy
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.svm import SVC
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.naive_bayes import GaussianNB
+
+from sklearn.metrics import confusion_matrix, accuracy_score, cohen_kappa_score, r2_score, roc_auc_score, roc_curve, mean_squared_error, classification_report, ConfusionMatrixDisplay
 
 dtype_dict = {
     "Weather": "string",
@@ -29,10 +38,21 @@ df = pd.read_csv(filepath_or_buffer='./dataset_traffic_accident_prediction1.csv'
 page1 = "Prezentare date"
 page2 = "Analiza exploratorie a datelor"
 page3 = "Utilizarea GeoPandas"
+page4 = "Predicții și indicatori de performanță"
 
-section = st.sidebar.radio("Sectiune", [page1, page2, page3])
+section = st.sidebar.radio("Sectiune", [page1, page3, page2, page4])
 
-st.title("Predictie Accidente Rutiere")
+st.title("Predicție Accidente Rutiere")
+
+if "isReadyForPredictions" not in st.session_state:
+    st.session_state.isReadyForPredictions = False
+    st.session_state.g_df_cleaned = None
+    st.session_state.g_df_encoded = None
+    st.session_state.g_le_dict = None
+    st.session_state.g_df_scaled = None
+    st.session_state.g_scaler = None
+    st.session_state.numerical_columns = None
+    st.session_state.categorical_columns = None
 
 if section == page1:
     st.header(page1)
@@ -384,8 +404,19 @@ elif section == page2:
 
     st.text("Se observă că media tinde spre 0 și deviația standard tinde spre 1, ceea ce confirmă scalarea corectă a datelor.")
 
+    st.session_state.g_df_cleaned = df_cleaned.copy(deep=True)
+    st.session_state.g_df_encoded = df_encoded.copy(deep=True)
+    st.session_state.g_le_dict = copy.deepcopy(le_dict)
+    st.session_state.g_df_scaled = df_scaled.copy(deep=True)
+    st.session_state.g_scaler = copy.deepcopy(scaler)
+    st.session_state.numerical_columns = copy.deepcopy(numeric_columns)
+    st.session_state.categorical_columns = copy.deepcopy(categorical_columns)
+    st.session_state.isReadyForPredictions = True
+
 elif section == page3:
-    st.title("Accidente în România după severitate")
+    st.warning("Acestă pagină folosește un alt set de date. Toate celelalte pagini utilizează setul de date principal al acestui proiect.")
+
+    st.header("Accidente în România după severitate")
 
     romania_gdf = gpd.read_file("romania.json")
 
@@ -426,3 +457,147 @@ elif section == page3:
 
     # Afișează în Streamlit
     st.pyplot(fig)
+elif section == page4:
+    st.header(page4)
+
+    if st.session_state.isReadyForPredictions:
+        if st.session_state.g_df_cleaned is not None and\
+        st.session_state.g_df_encoded is not None and\
+        st.session_state.g_le_dict is not None and\
+        st.session_state.g_df_scaled is not None and\
+        st.session_state.g_scaler is not None and\
+        st.session_state.numerical_columns is not None and\
+        st.session_state.categorical_columns is not None:
+            df_cleaned = pd.DataFrame(copy.deepcopy(st.session_state.g_df_cleaned))
+            df_encoded = pd.DataFrame(copy.deepcopy(st.session_state.g_df_encoded))
+            le_dict = copy.deepcopy(st.session_state.g_le_dict)
+            df_scaled = pd.DataFrame(copy.deepcopy(st.session_state.g_df_scaled))
+            scaler = copy.deepcopy(st.session_state.g_scaler)
+            numerical_columns = copy.deepcopy(st.session_state.numerical_columns)
+            categorical_columns = copy.deepcopy(st.session_state.categorical_columns)
+
+            st.text("Vom realiza predicțiile, folosind setul de date principal cu valorile lipsă tratate, pe cel encodat, cât și pe cel scalat. Vom avea acces și la dicționarul de label-uri pentru decodare, cât și la scaler pentru scalarea datelor pentru predicție în aceeași manieră.")
+
+            st.subheader("Selectare valori pentru predicție")
+
+            predictori = df.columns[:-1]
+            tinta = df.columns[-1]
+
+            selected_values = {}
+            for column_name in predictori:
+                if pd.api.types.is_numeric_dtype(df_cleaned[column_name]):
+                    selected_values[column_name] = st.number_input(
+                        f"{column_name}", 
+                        min_value=float(df_cleaned[column_name].min()), 
+                        max_value=float(df_cleaned[column_name].max()), 
+                        value=float(df_cleaned[column_name].median())  # Default to median
+                    )
+                else:
+                    selected_values[column_name] = st.selectbox(
+                        f"{column_name}", 
+                        df_cleaned[column_name].unique()
+                    )
+
+            st.write("Selected Values:", selected_values)
+
+            st.subheader("Encodarea datelor LabelEncoder-ul preutilizat")
+
+            encoded_values = {}
+
+            for col in numerical_columns:
+                if col == "Accident":
+                    continue
+                encoded_values[col] = selected_values[col]
+
+            for col in categorical_columns:
+                encoded_values[col + "_encoded"] = int(le_dict[col][selected_values[col]])
+
+
+            st.write("Encoded Values:", encoded_values)
+
+            encoded_values["Accident"] = 0
+
+            st.subheader("Scalarea datelor cu StandardScaler-ul preutilizat")
+
+            scaled_values = copy.deepcopy(encoded_values)
+            df_scaled_values = pd.DataFrame([scaled_values])
+
+            expected_features = scaler.feature_names_in_  # Attribute from sklearn 1.0+
+            df_scaled_values = df_scaled_values.reindex(columns=expected_features, fill_value=0)
+
+            df_scaled_values = pd.DataFrame(scaler.transform(df_scaled_values), columns=expected_features)
+
+            map_scaled_values = {}
+            for col in df_scaled_values.columns:
+                map_scaled_values[col] = float(df_scaled_values[col].iloc[0])
+
+            del encoded_values["Accident"]
+            del scaled_values["Accident"]
+            df_scaled_values = df_scaled_values.drop(columns=["Accident"])
+            del map_scaled_values["Accident"]
+
+            st.write("Scaled Values:", map_scaled_values)
+
+            st.subheader("Alegere model și fine-tuning", divider="red")
+            modele = {
+                "LogisticRegression": LogisticRegression(),
+                "RandomForestClassifier": RandomForestClassifier(),
+                "GradientBoostingClassifier": GradientBoostingClassifier (),
+                "SVC": SVC(),
+                "LinearDiscriminantAnalysis": LinearDiscriminantAnalysis(),
+                "GaussianNB": GaussianNB()
+            }
+            model = st.selectbox("Model", modele.keys())
+            test_dims = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
+            test_dim = st.selectbox("Test size", test_dims, index=int(len(test_dims)/2))
+
+            predictori_encoded = [
+                predictor + "_encoded" if predictor in categorical_columns else predictor
+                for predictor in predictori
+            ]
+
+            df_scaled[tinta] = df_scaled[tinta].round().astype(int)
+            X_train, X_test, Y_train, Y_test = train_test_split(df_scaled[predictori_encoded], df_scaled[tinta], test_size=test_dim, random_state=42)
+
+            ###############################################################################################
+            m = modele[model]
+
+            m.fit(X_train, Y_train)
+            y_pred = m.predict(X_test)
+            #mse = mean_squared_error(Y_test, y_pred)
+            acc = accuracy_score(Y_test, y_pred)
+            ck = cohen_kappa_score(Y_test, y_pred)
+            #r2 = r2_score(Y_test, y_pred)
+            roc = roc_auc_score(Y_test, y_pred)
+            
+            indicatori = pd.DataFrame(data={
+                #"MSE" : mse,
+                "Acuratețe globală" : acc,
+                "Cohen Kappa" : ck,
+                #"R2" : r2,
+                "ROC AUC": [roc] if roc is not None else ["N/A"]
+            }, index=["Valoare"])
+
+            st.dataframe(indicatori)
+
+            st.text("Classification Report:\n" + classification_report(Y_test, y_pred))
+
+            # plt.scatter(Y_test, y_pred)
+            # plt.xlabel("Actual")
+            # plt.ylabel("Predicted")
+            # plt.title(f"{model} Predictions")
+            # plt.axline((0, 0), slope=1, color='red', linestyle='--')  # Ideal line
+            # plt.grid(True)
+            # st.pyplot(plt)
+
+            ConfusionMatrixDisplay.from_predictions(Y_test, y_pred)
+            plt.title(f"Confusion Matrix - {model}")
+            st.pyplot(plt)
+
+            st.text("Având în vedere indicatorii obținuți pe setul de testare, predicția pentru valorile alese la început este:")
+
+            df_scaled_values = df_scaled_values.reindex(columns=predictori_encoded)
+            rezultat = m.predict(df_scaled_values)
+            st.write(f"Accident: {rezultat}")
+    else:
+        st.warning("Mergi la pagina: '" + page2 + "' pentru a procesa setul de date principal, mai întâi.")
