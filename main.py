@@ -14,7 +14,9 @@ from sklearn.svm import SVC
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.naive_bayes import GaussianNB
 
-from sklearn.metrics import confusion_matrix, accuracy_score, cohen_kappa_score, r2_score, roc_auc_score, roc_curve, mean_squared_error, classification_report, ConfusionMatrixDisplay
+from sklearn.metrics import accuracy_score, cohen_kappa_score, roc_auc_score, roc_curve, auc, classification_report, ConfusionMatrixDisplay, silhouette_samples, silhouette_score
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+import statsmodels.api as sm
 
 dtype_dict = {
     "Weather": "string",
@@ -99,7 +101,7 @@ if section == page1:
     Viteza maximă permisă pe drum.
 
     #### **Numărul de Vehicule**
-    Numărul vehiculelor implicate în accident (1 - 5).
+    Numărul vehiculelor implicate în accident.
 
     #### **Consum Alcool**
     Dacă șoferul a consumat alcool:
@@ -130,7 +132,7 @@ if section == page1:
     Valori între 18 și 70 de ani.
 
     #### **Experiența Șoferului**
-    Anii de experiență ai șoferului (0 - 50 ani).
+    Anii de experiență ai șoferului (0 - 70 ani).
 
     #### **Condițiile de Iluminare**
     Condițiile de iluminare de pe drum:
@@ -365,24 +367,20 @@ elif section == page2:
     if not st.session_state.show_button:
         f.pairplot_numeric(df_cleaned, numeric_cols)
 
-    # Identify non-numerical columns
     categorical_columns = [col for col, dtype in dtype_dict.items() if dtype == "string"]
 
-    # Apply LabelEncoder to categorical columns
-    le_dict = {}  # Store label encoders for inverse transformation if needed
+    le_dict = {}
     for col in categorical_columns:
         le = LabelEncoder()
         df[col + "_encoded"] = le.fit_transform(df[col])
-        le_dict[col] = dict(zip(le.classes_, le.transform(le.classes_)))  # Store mappings
+        le_dict[col] = dict(zip(le.classes_, le.transform(le.classes_)))
 
-    # Drop original categorical columns if needed
     df_encoded = df.drop(columns=categorical_columns)
 
     st.subheader("Utilizarea LabelEncoder pentru encodarea valorilor non-numerice")
 
     st.dataframe(df_encoded)
     
-    # Display encoding mappings in a readable format
     st.text("Mapping-ul Label Encoder-ului")
     for col, mapping in le_dict.items():
         st.write(f"**{col}**:")
@@ -431,7 +429,7 @@ elif section == page3:
 
     fig, ax = plt.subplots(figsize=(10, 10))
     romania_gdf.plot(ax=ax, color='lightgrey', edgecolor='black')
-    accidents_within_romania.plot(ax=ax, column='Accident_Severity', cmap='coolwarm', markersize=20, legend=True)
+    accidents_within_romania.plot(ax=ax, column='Accident_Severity', cmap='inferno', markersize=20, legend=True)
     ax.set_axis_off()
     plt.title("Accidente simulate în România după severitate")
 
@@ -444,18 +442,15 @@ elif section == page3:
     weather = st.selectbox("🌤️ Alege vremea:", accidents_within_romania["Weather"].unique())
     road_type = st.selectbox("🛣️ Alege tipul drumului:", accidents_within_romania["Road_Type"].unique())
 
-    # Filtrare după selectbox
     filtered_data_romania = accidents_within_romania[
         (accidents_within_romania["Weather"] == weather) & (accidents_within_romania["Road_Type"] == road_type)]
 
-    # Plot
     fig, ax = plt.subplots(figsize=(10, 10))
     romania_gdf.plot(ax=ax, color='white', edgecolor='black')
     filtered_data_romania.plot(ax=ax, color='red', markersize=30)
-    ax.set_axis_off()  # Ascunde axele pentru un aspect mai curat
+    ax.set_axis_off()
     plt.title(f"Accidente ({weather}, {road_type})")
 
-    # Afișează în Streamlit
     st.pyplot(fig)
 elif section == page4:
     st.header(page4)
@@ -490,7 +485,7 @@ elif section == page4:
                         f"{column_name}", 
                         min_value=float(df_cleaned[column_name].min()), 
                         max_value=float(df_cleaned[column_name].max()), 
-                        value=float(df_cleaned[column_name].median())  # Default to median
+                        value=float(df_cleaned[column_name].median())
                     )
                 else:
                     selected_values[column_name] = st.selectbox(
@@ -522,7 +517,7 @@ elif section == page4:
             scaled_values = copy.deepcopy(encoded_values)
             df_scaled_values = pd.DataFrame([scaled_values])
 
-            expected_features = scaler.feature_names_in_  # Attribute from sklearn 1.0+
+            expected_features = scaler.feature_names_in_
             df_scaled_values = df_scaled_values.reindex(columns=expected_features, fill_value=0)
 
             df_scaled_values = pd.DataFrame(scaler.transform(df_scaled_values), columns=expected_features)
@@ -559,22 +554,21 @@ elif section == page4:
             df_scaled[tinta] = df_scaled[tinta].round().astype(int)
             X_train, X_test, Y_train, Y_test = train_test_split(df_scaled[predictori_encoded], df_scaled[tinta], test_size=test_dim, random_state=42)
 
+            Y_test = [0 if value == -1 else 1 for value in Y_test]
+            Y_train = [0 if value == -1 else 1 for value in Y_train]
+
             ###############################################################################################
             m = modele[model]
 
             m.fit(X_train, Y_train)
             y_pred = m.predict(X_test)
-            #mse = mean_squared_error(Y_test, y_pred)
             acc = accuracy_score(Y_test, y_pred)
             ck = cohen_kappa_score(Y_test, y_pred)
-            #r2 = r2_score(Y_test, y_pred)
             roc = roc_auc_score(Y_test, y_pred)
             
             indicatori = pd.DataFrame(data={
-                #"MSE" : mse,
                 "Acuratețe globală" : acc,
                 "Cohen Kappa" : ck,
-                #"R2" : r2,
                 "ROC AUC": [roc] if roc is not None else ["N/A"]
             }, index=["Valoare"])
 
@@ -582,22 +576,193 @@ elif section == page4:
 
             st.text("Classification Report:\n" + classification_report(Y_test, y_pred))
 
-            # plt.scatter(Y_test, y_pred)
-            # plt.xlabel("Actual")
-            # plt.ylabel("Predicted")
-            # plt.title(f"{model} Predictions")
-            # plt.axline((0, 0), slope=1, color='red', linestyle='--')  # Ideal line
-            # plt.grid(True)
-            # st.pyplot(plt)
-
-            ConfusionMatrixDisplay.from_predictions(Y_test, y_pred)
+            ConfusionMatrixDisplay.from_predictions(Y_test, y_pred, cmap="Wistia")
             plt.title(f"Confusion Matrix - {model}")
             st.pyplot(plt)
+
+            fpr, tpr, thresholds = roc_curve(Y_test, y_pred)
+            roc_auc = auc(fpr, tpr)
+
+            roc_plot = plt.figure()
+            plt.plot(fpr, tpr, color='blue', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+            plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('Receiver Operating Characteristic')
+            plt.legend(loc='lower right')
+            plt.grid(True)
+            st.pyplot(roc_plot)
 
             st.text("Având în vedere indicatorii obținuți pe setul de testare, predicția pentru valorile alese la început este:")
 
             df_scaled_values = df_scaled_values.reindex(columns=predictori_encoded)
             rezultat = m.predict(df_scaled_values)
             st.write(f"Accident: {rezultat}")
+
+            st.subheader("Clusterizare", divider="red")
+
+            metoda_clusterizare = st.selectbox("Alege metoda de clusterizare:", ['single', 'average', 'weighted', 'complete', 'ward'])
+
+            ierarhie = linkage(y=df_scaled, method=metoda_clusterizare)
+
+            ierarhie_df = pd.DataFrame(data=ierarhie, index=[str(i) for i in range(len(ierarhie))], columns=[["Cluster 1", "Cluster 2", "Distanta", "Nr Instante"]])
+            ierarhie_df[["Cluster 1", "Cluster 2", "Nr Instante"]] = ierarhie_df[["Cluster 1", "Cluster 2", "Nr Instante"]].values.astype(int)
+            st.text("Matricea ierarhie:")
+            st.dataframe(ierarhie_df)
+
+            distante = ierarhie[:, 2]
+            diferente = np.diff(distante, 2)
+            elbow = len(ierarhie) - np.argmax(diferente) + 1
+
+            threshold = (ierarhie[np.argmax(diferente), 2] + ierarhie[np.argmax(diferente) + 1, 2]) / 2
+
+            dendograma = plt.figure()
+            plt.plot()
+            plt.title(label="Dendograma pentru partiția optimală")
+            dendrogram(Z=ierarhie, p=int(elbow), truncate_mode='lastp')
+            plt.axhline(y=threshold)
+            st.pyplot(dendograma)
+
+            clusters = fcluster(Z=ierarhie, t=int(elbow), criterion='maxclust')
+            df_cleaned_copy = df_cleaned.copy(deep=True)
+            df_cleaned_copy["Cluster"] = clusters
+            st.text("Afișarea setului de date grupat pe clusteri:")
+            st.dataframe(df_cleaned_copy)
+
+            silhouette = silhouette_samples(X=df_scaled, labels=clusters)
+            silhouette_total = silhouette_score(X=df_scaled, labels=clusters)
+
+            st.text(f"Scorul Silhouette pentru partiția optimală: {silhouette_total}")
+
+            s_plot = plt.figure()
+            plt.plot()
+            plt.title(label="Plot Silhouette pentru partiția optimală")
+            x = np.arange(1, len(silhouette) + 1, 1)
+            plt.xticks(x)
+            #plt.scatter(x=x, y=silly)
+            plt.hist(x, bins=len(silhouette), weights=silhouette)
+            #plt.stem(x, silly, linefmt="b-", markerfmt="bo", basefmt="r-")
+            st.pyplot(s_plot)
+
+            st.text("Clusterizare pe partiție-k:")
+
+            k = st.selectbox("k =", [i for i in range(2, int(len(df_scaled) / 2))])
+            m = len(ierarhie)
+
+            def calcul(k):
+                for i in range(m):
+                    if m - i == k + 1:
+                        return (ierarhie[i, 2] + ierarhie[i + 1, 2]) / 2
+                    
+            threshold = calcul(k)
+
+            dendograma_k = plt.figure()
+            plt.plot()
+            plt.title(label=f"Dendograma pentru partiția k={k}")
+            dendrogram(Z=ierarhie, p=k, truncate_mode='lastp')
+            plt.axhline(y=threshold)
+            st.pyplot(dendograma_k)
+
+            clusters_k = fcluster(Z=ierarhie, t=k, criterion='maxclust')
+            df_cleaned_copy_k = df_cleaned.copy(deep=True)
+            df_cleaned_copy_k["Cluster"] = clusters_k
+            st.text(f"Afișarea setului de date grupat pe clusteri, cu k = {k}:")
+            st.dataframe(df_cleaned_copy_k)
+
+            silhouette_k = silhouette_samples(X=df_scaled, labels=clusters_k)
+            silhouette_total_k = silhouette_score(X=df_scaled, labels=clusters_k)
+
+            s_plot_k = plt.figure()
+            plt.plot()
+            plt.title(label=f"Plot Silhouette pentru k = {k}")
+            x = np.arange(1, len(silhouette_k) + 1, 1)
+            plt.xticks(x)
+            #plt.scatter(x=x, y=silly)
+            plt.hist(x, bins=len(silhouette_k), weights=silhouette_k)
+            #plt.stem(x, silly, linefmt="b-", markerfmt="bo", basefmt="r-")
+            st.pyplot(s_plot_k)
+
+            st.text(f"Scorul Silhouette pentru partiția k = {k}: {silhouette_total_k}")
+
+            st.subheader("Analiza Regresiei Multiple (statsmodels)", divider='red')
+            st.write("Această secțiune folosește datele *înainte* de scalare (dar după encodare) pentru o interpretare mai ușoară a coeficienților.")
+
+            dependent_var_options_reg = df_encoded.select_dtypes(include=np.number).columns.tolist()
+            default_dependent_reg = 'Accident' if 'Accident' in dependent_var_options_reg else (dependent_var_options_reg[0] if dependent_var_options_reg else None)
+
+            if default_dependent_reg:
+                dependent_var_reg = st.selectbox(
+                    "Alege Variabila Dependentă (Y) pentru regresie:",
+                    dependent_var_options_reg,
+                    index=dependent_var_options_reg.index(default_dependent_reg),
+                    key='reg_dependent_var_select',
+                )
+            else:
+                st.warning("Nu s-au găsit coloane numerice pentru variabila dependentă în datele encodate.")
+                dependent_var_reg = None
+
+            if dependent_var_reg:
+                independent_var_options_reg = [col for col in dependent_var_options_reg if col != dependent_var_reg]
+                default_independent_reg_sugg = ['Driver_Age', 'Traffic_Density', 'Number_of_Vehicles', 'Speed_Limit']
+                default_independent_reg = [col for col in default_independent_reg_sugg if col in independent_var_options_reg]
+
+                independent_vars_reg = st.multiselect(
+                    "Alege Variabilele Independente (X) pentru regresie:",
+                    independent_var_options_reg,
+                    default=default_independent_reg,
+                    key='reg_independent_vars_multi'
+                )
+
+                if independent_vars_reg:
+                    st.write(f"Se va construi un model OLS pentru a prezice '{dependent_var_reg}' folosind: {', '.join(independent_vars_reg)}")
+
+                    try:
+                        Y_reg = pd.to_numeric(df_encoded[dependent_var_reg], errors='coerce')
+                        X_reg = df_encoded[independent_vars_reg].apply(pd.to_numeric, errors='coerce')
+
+                        data_reg = pd.concat([Y_reg, X_reg], axis=1).dropna()
+
+                        if data_reg.empty:
+                            st.error("Nu există date valide pentru regresie după eliminarea valorilor NaN introduse la conversia numerică.")
+                        else:
+                            Y_reg_clean = data_reg[dependent_var_reg].astype(float)
+                            X_reg_clean = data_reg[independent_vars_reg].astype(float)
+
+                            X_reg_const = sm.add_constant(X_reg_clean)
+
+                            model_ols = sm.OLS(Y_reg_clean, X_reg_const)
+                            results_ols = model_ols.fit()
+
+                            st.subheader("Sumarul Modelului de Regresie Multiplă (OLS)")
+                            st.code(results_ols.summary().as_text())
+
+                            st.subheader("Interpretare Sumar (simplificat)")
+                            st.write(f"- **R-squared:** {results_ols.rsquared:.3f}")
+                            st.write(f"- **Adj. R-squared:** {results_ols.rsquared_adj:.3f}")
+                            st.write(f"- **P-value (F-statistic):** {results_ols.f_pvalue:.3g}")
+
+                            st.write("**Coeficienți și Semnificația lor (P>|t|):**")
+                            results_summary_df = pd.DataFrame({
+                                'Coeficient': results_ols.params,
+                                'Std. Error': results_ols.bse,
+                                't': results_ols.tvalues,
+                                'P>|t|': results_ols.pvalues,
+                                '[0.025': results_ols.conf_int()[0],
+                                '0.975]': results_ols.conf_int()[1]
+                            })
+                            st.dataframe(results_summary_df)
+                            st.caption("*Valorile P>|t| mici (ex: < 0.05) sugerează că predictorul respectiv este semnificativ statistic.*")
+
+                    except Exception as e:
+                        st.error(f"Eroare la construirea modelului de regresie OLS: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
+
+                else:
+                    st.warning("Selectează cel puțin o variabilă independentă pentru regresie.")
+            else:
+                st.warning("Selectează o variabilă dependentă pentru regresie.")
     else:
         st.warning("Mergi la pagina: '" + page2 + "' pentru a procesa setul de date principal, mai întâi.")
